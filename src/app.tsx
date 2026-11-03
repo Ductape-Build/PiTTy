@@ -35,7 +35,7 @@ import type {
 } from "./types.ts";
 import type { DiagnosticLogger } from "./diagnostics/logger.ts";
 import { createDiagnosticBundle } from "./diagnostics/bundle.ts";
-import { PiRpcClient, PiRpcTimeoutError } from "./rpc/pi-rpc-client.ts";
+import { PiRpcClient, PiRpcTimeoutError, type RpcCapabilities } from "./rpc/pi-rpc-client.ts";
 import { ConversationModel, initialItems } from "./state/conversation.ts";
 import {
 	COMPACTION_STATUS_KEY,
@@ -754,6 +754,11 @@ export function App(props: AppOptions) {
 	const [_mcpActivationPending, setMcpActivationPending] = createSignal(false);
 	const [settingsSelectedId, setSettingsSelectedId] = createSignal("model");
 	const [rpcAvailable, setRpcAvailable] = createSignal(false);
+	const [backendCapabilities, setBackendCapabilities] = createSignal<RpcCapabilities>();
+	const backendLabel = () => backendCapabilities()?.displayName || backendCapabilities()?.backend || "Pi";
+	const extensionsSupported = () => backendCapabilities() !== undefined && backendCapabilities()?.extensions !== false;
+	const packagesSupported = () => extensionsSupported() && backendCapabilities()?.packageManagement !== false;
+	const unsupportedIntegration = () => backendCapabilities() ? `Optional Pi integrations are not supported by ${backendLabel()}.` : "Backend capabilities are still loading.";
 	const [settingsBusy, setSettingsBusy] = createSignal<
 		"model" | "thinking" | "rename" | "theme"
 	>();
@@ -1610,10 +1615,10 @@ export function App(props: AppOptions) {
 		preserveEquivalentTodos(previous, deriveTodos(items())),
 	);
 	const subagentsAvailable = createMemo(
-		() => props.integrations.subagents.installed || runs().length > 0,
+		() => extensionsSupported() && (props.integrations.subagents.installed || runs().length > 0),
 	);
 	const todosAvailable = createMemo(
-		() => props.integrations.todos.installed || todos().length > 0,
+		() => extensionsSupported() && (props.integrations.todos.installed || todos().length > 0),
 	);
 	const commandSuggestions = createMemo(() =>
 		filterCommandChoices(
@@ -1776,7 +1781,7 @@ export function App(props: AppOptions) {
 			sessionId: state.sessionId,
 			...(state.sessionFile ? { sessionFile: state.sessionFile } : {}),
 		};
-		const nextRuns = props.integrations.subagents.installed
+		const nextRuns = extensionsSupported() && props.integrations.subagents.installed
 			? mergeMissionRuns(
 					listSubagentRuns(identity),
 					identity,
@@ -2831,6 +2836,10 @@ export function App(props: AppOptions) {
 		}
 	};
 	const openMcpSettings = () => {
+		if (!packagesSupported()) {
+			toast(unsupportedIntegration(), "warning");
+			return;
+		}
 		const snapshot = loadMcpConfig(mcpScope(), props.cwd);
 		setMcpView("list");
 		setMcpPreview(undefined);
@@ -2872,6 +2881,10 @@ export function App(props: AppOptions) {
 		}
 	};
 	const installMcpAdapter = () => {
+		if (!packagesSupported()) {
+			toast(unsupportedIntegration(), "warning");
+			return;
+		}
 		setMcpInstallState("installing");
 		void installOptionalIntegrationAsync("pi-mcp-adapter", {
 			...(props.piExecutable ? { piExecutable: props.piExecutable } : {}),
@@ -3009,7 +3022,7 @@ export function App(props: AppOptions) {
 				label: "MCP servers",
 				summary: () =>
 					mcpInstallState() === "ready" ? "Adapter ready" : "Adapter optional",
-				disabledReason: () => undefined,
+				disabledReason: () => packagesSupported() ? undefined : unsupportedIntegration(),
 				busy: () => mcpInstallState() === "installing",
 				inlineError: () => mcpError(),
 				open: openMcpSettings,
@@ -3022,9 +3035,9 @@ export function App(props: AppOptions) {
 						? "Browse, search, remove"
 						: "Requires pi-hermes-memory",
 				disabledReason: () =>
-					props.integrations.memory.installed
-						? undefined
-						: "Install pi-hermes-memory",
+					!extensionsSupported()
+						? unsupportedIntegration()
+						: props.integrations.memory.installed ? undefined : "Install pi-hermes-memory",
 				busy: () => false,
 				inlineError: () => undefined,
 				open: () => openMemoryBrowser(true),
@@ -3039,12 +3052,15 @@ export function App(props: AppOptions) {
 			const choices = await discoverSessions(
 				props.cwd,
 				sessionState()?.sessionFile,
-				(loaded, total) => {
-					if (generation === sessionDiscoveryGeneration)
-						setSessionDiscovery({
-							kind: "loading",
-							progress: { loaded, total },
-						});
+				{
+					client: activeRuntime().client,
+					onProgress: (loaded, total) => {
+						if (generation === sessionDiscoveryGeneration)
+							setSessionDiscovery({
+								kind: "loading",
+								progress: { loaded, total },
+							});
+					},
 				},
 			);
 			if (generation !== sessionDiscoveryGeneration) return;
@@ -3193,6 +3209,10 @@ export function App(props: AppOptions) {
 	};
 
 	const openMemoryBrowser = (fromSettings = false) => {
+		if (!extensionsSupported()) {
+			toast(unsupportedIntegration(), "warning");
+			return;
+		}
 		if (!props.integrations.memory.installed) {
 			toast(
 				"Install pi-hermes-memory to browse persistent memory",
@@ -3290,23 +3310,6 @@ export function App(props: AppOptions) {
 				),
 			);
 		}
-		const missingIntegrations = [
-			!props.integrations.subagents.installed
-				? "a supported subagent runtime (@mistrjirka/pi-subagent or pi-subagents)"
-				: undefined,
-			!props.integrations.todos.installed
-				? "@juicesharp/rpiv-todo (Todo panel)"
-				: undefined,
-		].filter((value): value is string => Boolean(value));
-		if (missingIntegrations.length) {
-			queueMicrotask(() =>
-				toast(
-					`Optional Pi packages not detected: ${missingIntegrations.join(", ")}. PiTTy will continue without them.`,
-					"info",
-					7000,
-				),
-			);
-		}
 		let startupFailure: Error | undefined;
 		const startupRuntime = bootRuntime;
 		startupRuntime.client.on("protocol-error", (error: Error) => {
@@ -3335,6 +3338,24 @@ export function App(props: AppOptions) {
 			try {
 				await startupRuntime.client.start();
 				props.logger.info("ui.pi_started");
+				setBackendCapabilities(await startupRuntime.client.getCapabilities());
+				if (extensionsSupported()) {
+					const missingIntegrations = [
+						!props.integrations.subagents.installed
+							? "a supported subagent runtime (@mistrjirka/pi-subagent or pi-subagents)"
+							: undefined,
+						!props.integrations.todos.installed
+							? "@juicesharp/rpiv-todo (Todo panel)"
+							: undefined,
+					].filter((value): value is string => Boolean(value));
+					if (missingIntegrations.length) {
+						toast(
+							`Optional Pi packages not detected: ${missingIntegrations.join(", ")}. PiTTy will continue without them.`,
+							"info",
+							7000,
+						);
+					}
+				}
 				const startupDeadlineAt = Date.now() + STARTUP_DEADLINE_MS;
 				const remainingStartupMs = () =>
 					Math.max(1, startupDeadlineAt - Date.now());
@@ -3530,7 +3551,7 @@ export function App(props: AppOptions) {
 		}
 		statsTimer = setInterval(() => void refreshState(), 10_000);
 		subagentsTimer = setInterval(() => {
-			if (!props.integrations.subagents.installed) return;
+			if (!extensionsSupported() || !props.integrations.subagents.installed) return;
 			const state = sessionState();
 			if (state) refreshSubagentRuns(state);
 		}, 750);
@@ -4509,6 +4530,7 @@ export function App(props: AppOptions) {
 				</box>
 				<Show when={visibleSidebar()}>
 					<Sidebar
+						backendLabel={backendLabel()}
 						state={sessionState()}
 						stats={sessionStats()}
 						lastRequestPerformance={lastRequestPerformance()}

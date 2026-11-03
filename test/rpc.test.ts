@@ -23,6 +23,47 @@ describe("PiRpcClient", () => {
     expect(DEFAULT_REQUEST_TIMEOUT_MS).toBe(60_000);
   });
 
+  test("uses filesystem-compatible defaults when Pi rejects the optional capabilities probe", async () => {
+    const client = new PiRpcClient({ cwd: process.cwd(), executable: path.resolve("scripts/mock-pi-rpc.mjs") });
+    clients.push(client);
+    await client.start();
+    expect(await client.getCapabilities()).toEqual({});
+    await expect(client.getState()).resolves.toMatchObject({ sessionName: "Mock Pi Session" });
+    await expect(client.prompt("chat after unsupported probe")).resolves.toBeUndefined();
+  });
+
+  test("discovers backend sessions and preserves opaque references through switch and restart", async () => {
+    const client = new PiRpcClient({ cwd: process.cwd(), executable: path.resolve("scripts/mock-pi-rpc.mjs"), env: { MOCK_BACKEND: "iris" } });
+    clients.push(client);
+    await client.start();
+    expect(await client.getCapabilities()).toEqual({ sessionDiscovery: true, backend: "iris-durable", displayName: "Iris", extensions: false, packageManagement: false });
+    expect((await client.listSessions()).map((session) => session.path)).toEqual(["iris:41", "iris:42"]);
+    await client.switchSession("iris:41");
+    expect((await client.getState()).sessionFile).toBe("iris:41");
+    await client.restart();
+    expect((await client.getState()).sessionFile).toBe("iris:41");
+  });
+
+  test("throws rejected prompt, queue, abort, and configuration responses", async () => {
+    const rejected = ["prompt", "steer", "follow_up", "abort", "set_auto_compaction", "set_auto_retry", "set_steering_mode", "set_follow_up_mode"];
+    const client = new PiRpcClient({ cwd: process.cwd(), executable: path.resolve("scripts/mock-pi-rpc.mjs"), env: { MOCK_REJECT_COMMANDS: rejected.join(",") } });
+    clients.push(client);
+    await client.start();
+    const operations = [
+      () => client.prompt("rejected"),
+      () => client.steer("rejected"),
+      () => client.followUp("rejected"),
+      () => client.abort(),
+      () => client.setAutoCompaction(true),
+      () => client.setAutoRetry(true),
+      () => client.setSteeringMode("all"),
+      () => client.setFollowUpMode("all"),
+    ];
+    for (const [index, operation] of operations.entries()) {
+      await expect(operation()).rejects.toThrow(`Unsupported control: ${rejected[index]}`);
+    }
+  });
+
   test("starts Pi RPC, reads state, and forwards stream events", async () => {
     const client = new PiRpcClient({ cwd: process.cwd(), executable: path.resolve("scripts/mock-pi-rpc.mjs") });
     clients.push(client);

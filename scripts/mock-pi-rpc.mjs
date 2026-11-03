@@ -132,7 +132,21 @@ rl.on("line", async (line) => {
     await new Promise((resolve) => setTimeout(resolve, startupWaitMs));
   if (command.type === "extension_ui_response") return;
   const response = (data) => send({ type: "response", id: command.id, command: command.type, success: true, ...(data === undefined ? {} : { data }) });
+  if ((process.env.MOCK_REJECT_COMMANDS ?? "").split(",").includes(command.type)) {
+    send({ type: "response", id: command.id, command: command.type, success: false, error: `Unsupported control: ${command.type}` });
+    return;
+  }
   switch (command.type) {
+    case "get_capabilities":
+      if (process.env.MOCK_BACKEND === "iris") response({ sessionDiscovery: true, backend: "iris-durable", displayName: "Iris", extensions: false, packageManagement: false });
+      else send({ type: "response", id: command.id, command: command.type, success: false, error: "Unknown command: get_capabilities" });
+      break;
+    case "list_sessions":
+      response({ sessions: [
+        { path: "iris:41", id: "41", name: "Slack conversation", modified: "2026-11-01T10:00:00.000Z", messageCount: 12, firstMessage: "Slack request" },
+        { path: "iris:42", id: "42", name: "Terminal conversation", modified: "2026-11-02T10:00:00.000Z", messageCount: 3, firstMessage: "Terminal request" },
+      ] });
+      break;
     case "get_state": response(state); break;
     case "get_messages": response({ messages: history }); break;
     case "get_fork_messages": response({ messages: [] }); break;

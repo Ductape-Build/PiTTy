@@ -31,6 +31,24 @@ export type ThinkingLevel =
 
 export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
+/** Optional RPC extensions. An absent field retains standard Pi behavior. */
+export type RpcCapabilities = {
+	sessionDiscovery?: boolean;
+	backend?: string;
+	displayName?: string;
+	extensions?: boolean;
+	packageManagement?: boolean;
+};
+
+export type RpcSessionInfo = {
+	path: string;
+	id: string;
+	name?: string;
+	modified: string;
+	messageCount: number;
+	firstMessage: string;
+};
+
 export type PiRpcClientOptions = {
 	cwd: string;
 	executable?: string;
@@ -69,6 +87,7 @@ export class PiRpcClient extends EventEmitter {
 	private stderrBuffer = "";
 	private stopping = false;
 	private startupArgs: string[];
+	private capabilitiesRequest: Promise<RpcCapabilities> | undefined;
 
 	constructor(private readonly options: PiRpcClientOptions) {
 		super();
@@ -92,6 +111,7 @@ export class PiRpcClient extends EventEmitter {
 		this.stopping = false;
 		this.stdoutBuffer = "";
 		this.stderrBuffer = "";
+		this.capabilitiesRequest = undefined;
 		const configuredExecutable =
 			this.options.executable ?? resolveDefaultPiExecutable();
 		const piArgs = ["--mode", "rpc", ...this.startupArgs];
@@ -215,24 +235,24 @@ export class PiRpcClient extends EventEmitter {
 		message: string,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<void> {
-		await this.request({
+		this.data(await this.request({
 			type: "prompt",
 			message,
 			...(streamingBehavior ? { streamingBehavior } : {}),
-		});
+		}));
 	}
 
 	async steer(message: string): Promise<void> {
-		await this.request({ type: "steer", message });
+		this.data(await this.request({ type: "steer", message }));
 	}
 
 	async followUp(message: string): Promise<void> {
-		await this.request({ type: "follow_up", message });
+		this.data(await this.request({ type: "follow_up", message }));
 	}
 
 	async abort(): Promise<void> {
 		try {
-			await this.request({ type: "abort" });
+			this.data(await this.request({ type: "abort" }));
 		} catch (error) {
 			// Pi can finish aborting the active provider/tool before its RPC handler
 			// gets a chance to acknowledge the command. Treat an acknowledgement
@@ -243,6 +263,21 @@ export class PiRpcClient extends EventEmitter {
 			}
 			throw error;
 		}
+	}
+
+	/** Standard Pi rejects this optional probe; discovery then stays filesystem-based. */
+	getCapabilities(): Promise<RpcCapabilities> {
+		return this.capabilitiesRequest ??= this.request({ type: "get_capabilities" }).then((response) => {
+			if (!response.success && /unknown|unsupported|not supported|unrecognized/i.test(response.error)) return {};
+			return this.data<RpcCapabilities>(response);
+		});
+	}
+
+	async listSessions(): Promise<RpcSessionInfo[]> {
+		const data = this.data<{ sessions: RpcSessionInfo[] }>(
+			await this.request({ type: "list_sessions" }),
+		);
+		return data.sessions;
 	}
 
 	async getState(timeoutMsOverride?: number): Promise<RpcSessionState> {
@@ -290,19 +325,19 @@ export class PiRpcClient extends EventEmitter {
 	}
 
 	async setAutoCompaction(enabled: boolean): Promise<void> {
-		await this.request({ type: "set_auto_compaction", enabled });
+		this.data(await this.request({ type: "set_auto_compaction", enabled }));
 	}
 
 	async setAutoRetry(enabled: boolean): Promise<void> {
-		await this.request({ type: "set_auto_retry", enabled });
+		this.data(await this.request({ type: "set_auto_retry", enabled }));
 	}
 
 	async setSteeringMode(mode: "all" | "one-at-a-time"): Promise<void> {
-		await this.request({ type: "set_steering_mode", mode });
+		this.data(await this.request({ type: "set_steering_mode", mode }));
 	}
 
 	async setFollowUpMode(mode: "all" | "one-at-a-time"): Promise<void> {
-		await this.request({ type: "set_follow_up_mode", mode });
+		this.data(await this.request({ type: "set_follow_up_mode", mode }));
 	}
 
 	async setSessionName(name: string): Promise<void> {
@@ -416,7 +451,7 @@ export class PiRpcClient extends EventEmitter {
 	}
 
 	private request(
-		command: RpcCommand,
+		command: RpcCommand | { type: "get_capabilities" | "list_sessions" },
 		timeoutMsOverride?: number,
 	): Promise<RpcResponse> {
 		if (!this.child?.stdin.writable)

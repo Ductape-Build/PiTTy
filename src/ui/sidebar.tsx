@@ -148,6 +148,7 @@ function notificationToneIcon(tone: NotificationRecord["tone"]): string {
 export { targetToolActivity, targetToolUsage } from "./model-context.tsx";
 
 export function Sidebar(props: {
+	backendLabel?: string;
 	state?: RpcSessionState | undefined;
 	stats?: SessionStats | undefined;
 	lastRequestPerformance?: RequestPerformance | undefined;
@@ -338,7 +339,7 @@ export function Sidebar(props: {
 				)}
 			</text>
 			<text width="100%" height={1} fg={colors.subtle} wrapMode="none">
-				PiTTy v{appVersion}
+				PiTTy v{appVersion} · {props.backendLabel ?? "Pi"}
 			</text>
 			<box height={1} />
 			<ModelContextRows

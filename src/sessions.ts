@@ -1,4 +1,5 @@
-import { SessionManager, type SessionInfo } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { PiRpcClient } from "./rpc/pi-rpc-client.ts";
 
 export type SessionChoice = {
   path: string;
@@ -20,7 +21,7 @@ export type SessionDiscoveryState =
   | { kind: "empty"; choices: [] }
   | { kind: "error"; error: string };
 
-export function mapSessionInfo(info: SessionInfo): SessionChoice {
+export function mapSessionInfo(info: Omit<SessionChoice, "name"> & { name?: string }): SessionChoice {
   return {
     path: info.path,
     id: info.id,
@@ -31,7 +32,7 @@ export function mapSessionInfo(info: SessionInfo): SessionChoice {
   };
 }
 
-export function prepareSessionChoices(infos: SessionInfo[], activePath?: string): SessionChoice[] {
+export function prepareSessionChoices(infos: Array<Omit<SessionChoice, "name"> & { name?: string }>, activePath?: string): SessionChoice[] {
   return infos
     .filter((info) => info.path !== activePath)
     .map(mapSessionInfo)
@@ -44,7 +45,19 @@ export function filterSessionChoices(choices: SessionChoice[], query: string): S
   return choices.filter((choice) => [choice.name, choice.firstMessage, choice.id].some((value) => value.toLowerCase().includes(normalized)));
 }
 
-export async function discoverSessions(cwd: string, activePath?: string, onProgress?: (loaded: number, total: number) => void): Promise<SessionChoice[]> {
-  const infos = await SessionManager.list(cwd, undefined, onProgress);
+export type SessionDiscoveryOptions = {
+  client?: Pick<PiRpcClient, "getCapabilities" | "listSessions">;
+  onProgress?: (loaded: number, total: number) => void;
+};
+
+export async function discoverSessions(cwd: string, activePath?: string, options: SessionDiscoveryOptions = {}): Promise<SessionChoice[]> {
+  if (options.client && (await options.client.getCapabilities()).sessionDiscovery) {
+    const sessions = await options.client.listSessions();
+    return prepareSessionChoices(sessions.map((session) => ({
+      ...session,
+      modified: new Date(session.modified),
+    })), activePath);
+  }
+  const infos = await SessionManager.list(cwd, undefined, options.onProgress);
   return prepareSessionChoices(infos, activePath);
 }

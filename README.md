@@ -38,6 +38,15 @@ An empty session opens straight into the chat with a passive dashboard of recent
 
 Pi extensions generally keep working: commands, tools, prompt templates, skills, notifications, status updates, and standard dialogs flow through RPC. Custom `pi-tui` component trees are not serialized, so extension-owned renderers won't look identical, and interactive `/login` is done once in regular Pi.
 
+### Alternate RPC backends (integration branch)
+
+This fork keeps the upstream UI and adds an optional session-discovery boundary for durable backends. Pass the backend executable with `--pi /path/to/backend`. It must implement Pi's JSON RPC conversation protocol. If `get_capabilities` returns `{"sessionDiscovery":true,"displayName":"Iris","extensions":false,"packageManagement":false}`, `/resume` uses its `list_sessions` response instead of Pi's local JSONL files. Session references remain opaque; no transcript mirrors are required. Ordinary Pi continues using filesystem discovery when the capability command is unsupported.
+
+`list_sessions` returns `{"sessions":[{"path":"opaque:reference","id":"stable-id","name":"Session title","modified":"2026-11-03T00:00:00.000Z","messageCount":2,"firstMessage":"Hello"}]}`. Backend discovery errors remain visible rather than silently showing unrelated Pi sessions. Unsupported RPC controls are surfaced as errors, and capability flags hide Pi-only package controls for other engines.
+
+The `iris-backend` branch is maintained in [Ductape-Build/PiTTy](https://github.com/Ductape-Build/PiTTy). With Iris installed, use `iris-pitty`; its update command stages the integration branch plus the latest stable upstream release and verifies compatibility before activation. Upstream `pitty upgrade` is for ordinary PiTTy and does not preserve this branch's integration hook.
+
+
 ## Install
 
 ### Linux, macOS, and WSL

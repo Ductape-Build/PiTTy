@@ -127,6 +127,19 @@ describe("tab runtime factory", () => {
 		expect(sessionFilePiArgs(["-c", "--", "--custom"], "/tmp/fork.jsonl")).toEqual(["--session", "/tmp/fork.jsonl", "--", "--custom"]);
 	});
 
+	test("preserves opaque backend session references in tab arguments and fork state", async () => {
+		expect(sessionFilePiArgs(["--continue"], "iris:41")).toEqual(["--session", "iris:41"]);
+		const client = new ForkStubClient([state("iris:41", "41"), state("iris:43", "43")], []);
+		const runtime = createTabRuntime({ id: "fork", cwd: process.cwd(), client });
+		const result = await prepareForkedTabRuntime(runtime, "entry-1");
+		expect(result.sessionFile).toBe("iris:43");
+		expect(runtime.sessionState?.sessionFile).toBe("iris:43");
+		expect(planForkTab("iris:41", "iris:43", 2)).toMatchObject({
+			originalSessionFile: "iris:41",
+			branchedSessionFile: "iris:43",
+		});
+	});
+
 	test("creates isolated clients, models, drafts, and expansion state", () => {
 		const first = createTabRuntime({ id: "one", cwd: process.cwd() });
 		const second = createTabRuntime({ id: "two", cwd: process.cwd() });
